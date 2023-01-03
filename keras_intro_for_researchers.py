@@ -420,3 +420,179 @@ dataset = dataset.shuffle(buffer_size=1024).batch(64)
 
 # a new mlp
 mlp = SparseMLP()
+
+# Loss and optimizer
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.SGD(learning_rate=1e-3)
+
+for step, (x, y) in enumerate(dataset):
+    with tf.GradientTape() as tape:
+         # forward pass
+         logits = mlp(x)
+         # external loss value for this batch
+         loss = loss_fn(y, logits)
+         # add the losses created during the forward pass
+         loss += sum(mlp.losses)
+         # get gradients of the loss wrt the weights
+         gradients = tape.gradient(loss, mlp.trainable_weights)
+
+
+    # update the weights of our linear layer
+    optimizer.apply_gradients(zip(gradients, mlp.trainable_weights))
+
+    # logging
+    if step % 100 == 0:
+        print("Step:", step, "Loss:", float(loss))
+
+"""
+Step: 0 Loss: 6.307978630065918
+Step: 100 Loss: 2.5283541679382324
+Step: 200 Loss: 2.4068050384521484
+Step: 300 Loss: 2.3749840259552
+Step: 400 Loss: 2.34563946723938
+Step: 500 Loss: 2.3380157947540283
+Step: 600 Loss: 2.3201656341552734
+Step: 700 Loss: 2.3250539302825928
+Step: 800 Loss: 2.344613790512085
+Step: 900 Loss: 2.3183579444885254
+
+keeping track of training metrics
+
+keras offers a broad range of built in metrics like tf.keras.metrics.AUC or tf.keras.metrics.PrecisionAtRecall
+
+it is also easy to create your own metrics in a few lines of code
+
+to use a metric in a custom training loop, you would
+
+instantiate the metric object eg metric = tf.keras.metrics.AUC()
+call its metric.update_state(targets, predictions) method for each batch of data
+query its result via metric.result()
+reset the metric's state at the end of an epoch or at the start of an evaluation via metric.reset_state()
+
+simple example
+"""
+
+# instantiate a metric object
+accuracy = tf.keras.metrics.SparseCategoricalAccuracy()
+
+# prepare our layer, loss, and optimizer
+model = keras.Sequential(
+    [
+        keras.layers.Dense(32, activation="relu"),
+        keras.layers.Dense(32, activation="relu"),
+        keras.layers.Dense(10)
+    ]
+)
+
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.Adam(learning_rate = 1e-3)
+
+for epoch in range(2):
+    # iterate over the batches of a dataset
+    for step, (x, y) in enumerate(dataset):
+        with tf.GradientTape() as tape:
+            logits = model(x)
+            # compute the loss value for this batch
+            loss_value = loss_fn(y, logits)
+
+        # update the state of the accuracy metric
+        accuracy.update_state(y, logits)
+
+        # update the weights of the model to mimimize the loss value
+        gradients = tape.gradient(loss_value, model.trainable_weights)
+        optimizer.apply_gradients(zip(gradients, model.trainable_weights))
+
+        # logging the current accuracy value so far
+        if step % 200 == 0:
+            print("Epoch:", epoch, "Step:", step)
+            print("Total running accuracy so far: %.3f" % accuracy.result())
+
+
+     # reset the metrics state at the end of an epoch
+     accuracy.reset_state()
+
+"""
+Epoch: 0 Step: 0
+Total running accuracy so far: 0.141
+Epoch: 0 Step: 200
+Total running accuracy so far: 0.751
+Epoch: 0 Step: 400
+Total running accuracy so far: 0.827
+Epoch: 0 Step: 600
+Total running accuracy so far: 0.859
+Epoch: 0 Step: 800
+Total running accuracy so far: 0.876
+Epoch: 1 Step: 0
+Total running accuracy so far: 0.938
+Epoch: 1 Step: 200
+Total running accuracy so far: 0.944
+Epoch: 1 Step: 400
+Total running accuracy so far: 0.944
+Epoch: 1 Step: 600
+Total running accuracy so far: 0.945
+Epoch: 1 Step: 800
+Total running accuracy so far: 0.945
+
+in addition to this, similary to the self.add_loss() method, you have access to an self.add_metric()
+method on layers. it tracks the average of whatever quantity you pass to it. you can reset the value
+of these metrics by calling layer.reset_metrics() on any layer or model.
+
+you can also define your own metrics by subclassing keras.metrics.Metric you need to over ride the three
+functions called above
+
+override update_state() to update the statistics values
+override result() to return the metric value
+overrise reset_state() to reset the metric to its initial state
+
+here is an example where we implement the F1-score metric (with support for sample weighting)
+"""
+class F1Score(keras.metrics.Metric):
+    def __init__(self, name="f1_score", dtype="float32", threshold=0.5, **kwargs):
+        super().__init__(name=name, dtype=dtype, **kwargs)
+        self.threshold = 0.5
+        self.true_positives = self.add_weight(name="tp", dtype=dtype, initializer="zeros")
+        self.false_positives = self.add_weight(name="fp", dtype=dtype, initializer="zeros")
+        self.false_negatives = self.add_Weight(name="fn", dtype=dtype, initializer="zeros")
+
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_pred = tf.math.greater_equal(y_pred, self.threshold)
+        y_true = tf.cast(y_true, tf.bool)
+        y_pred = tf.cast(y_pred, tf.bool)
+
+        true_positives = tf.cast(y_true & y_pred, self.dtype)
+        false_positives = tf.cast(~y_true & y_pred, self.dtype)
+        false negatives = tf.cast(y_true & ~y_pred, self.dtype)
+
+        if sample_weight is not None:
+            sample_weight = tf.cast(sample_weight, self.dtype)
+            true_positives *= sample_weight
+            false_positives *= sample_weight
+            false_negatives *= sample_weight
+
+        self.true_positives.assign_add(tf.reduce_sum(true_positives))
+        self.false_positives.assign_add(tf.reduce_sum(false_positives))
+        self.false_negatives.assign_add(tf.reduce_sum(false_negatives))
+
+    def result(self):
+        precision = self.true_positives / (self.true_positives + self.false_positives)
+        recall = self.true_positives / (self.true_positives + self.false_negatives)
+        return precision * recall * 2.0 / (precision + recall)
+
+    def reset_state(self):
+        self.true_positives.assign(0)
+        self.false_positives.assign(0)
+        self.false_negatives.assign(0)
+
+
+m = F1Score()
+m.update_state([0, 1, 0, 0], [0.3, 0.5, 0.8, 0.9])
+print("Intermediate result:", float(m.result()))
+
+m.update_state([1, 1, 1, 1], [0.1,0.7, 0.6, 0.0])
+print("Final result:", float(m.result()))
+
+"""
+Intermediate result: 0.5
+Final result: 0.6000000238418579
+"""
