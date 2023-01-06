@@ -595,4 +595,193 @@ print("Final result:", float(m.result()))
 """
 Intermediate result: 0.5
 Final result: 0.6000000238418579
+
+Compiled functions
+
+running eagerly is great for debuggging, but you will get better performance by
+compiling your computations into static graphs. you can compile any function
+by wrapping it in a tf.function decorator
+
+"""
+
+# prepare the layer, loss and optimizer
+model = keras.Sequential(
+    [
+        keras.layers.Dense(32, activation="relu"),
+        keras.layers.Dense(32, activation="relu"),
+        keras.layers.Dense(10)
+    ]
+)
+
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+# create a training step function
+@tf.function # make it fast
+def train_on_batch(x, y):
+    with tf.GradientTape() as tape:
+        logits = model(x)
+        loss = loss_fn(y, logits)
+        gradients = tape.gradient(loss, model.trainable_weights)
+    optimizer.apply_gradients(zip(gradients, model.trainable_weights))
+    return loss
+
+
+# prepare a dataset
+(x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
+dataset = tf.data.Dataset.from_tensor_slices(
+    (x_train.reshape(60000, 784).astype("float32") / 255, y_train)
+)
+
+dataset = dataset.shuffle(buffer_size=1024).batch(64)
+
+for step, (x, y) in enumerate(dataset):
+    loss = train_on_batch(x, y)
+    if step % 100 == 0:
+        print("Step:", step, "Loss:", float(loss))
+
+"""
+Step: 0 Loss: 2.291861057281494
+Step: 100 Loss: 0.5378965735435486
+Step: 200 Loss: 0.48008084297180176
+Step: 300 Loss: 0.3359006941318512
+Step: 400 Loss: 0.28147661685943604
+Step: 500 Loss: 0.31419697403907776
+Step: 600 Loss: 0.2735794484615326
+Step: 700 Loss: 0.3001103401184082
+Step: 800 Loss: 0.18827161192893982
+Step: 900 Loss: 0.15798673033714294
+
+training mode and inference mode
+
+some layers in particular the batch normalization layer and the drop out layer
+have different behaviours during training and inference. for such layers, it is
+standard practice to expose a training boolean argument in the call method
+
+by exposing this argument in call, you enable the built in training and evaluation
+loops (eg fit) to correctly use the layer in training and inference modes
+"""
+
+class Dropout(keras.layers.Layer):
+    def __init__(self, rate):
+        super(Dropout, self).__init__()
+        self.rate = rate
+
+    def call(self, inputs, training=None):
+        if training:
+            return tf.nn.dropout(inputs, rate=self.rate)
+        return inputs
+
+class MLPwithDropout(keras.layers.Layer):
+    def __init__(self):
+        super(MLPwithDropout, self).__init__()
+        self.linear_1 = Linear(32)
+        self.dropout = Dropout(0.5)
+        self.linear_3 = Linear(10)
+
+    def call(self, inputs, training=None):
+        x = self.linear_1(inputs)
+        x = tf.nn.relu(x)
+        x = self.dropout(x, training=training)
+        return self.linear_3(x)
+
+mlp = MLPwithDropout()
+y_train = mlp(tf.ones((2, 2)), training=True)
+y_test = mlp(tf.ones((2, 2)), training=False)
+
+"""
+the functional api for model building
+to build deep learning models you dont have to use object oriented programming
+all the time.
+
+all layers we have seen can also be composed functionally
+
+we call it the functional api
+
+you can use an input object to describe the shape and dtype of inputs
+this is the deep learning equivalent of declaring a type
+the shape argument is per sample, it doesnt include batch size
+the functional api is focused on defining per sample transformations
+the model we create will automatically batch the per sample transformations
+so that it can be called on batches of data
+"""
+
+inputs = tf.keras.Input(shape=(16,), dtype="float32")
+
+# we call layers on these type objects
+# and they return updated types (new shapes / dtypes)
+x = Linear(32)(inputs) # we are re-using the linear layer we defined earlier
+# we are re-using the drop out layer we defined earlier
+x = Dropout(0.5)(x)
+outputs = Linear(10)(x)
+
+# a functional model can be defined by specifying inputs and outputs
+# a model is itself a layer like any other
+model = tf.keras.Model(inputs, outputs)
+
+# a functional model already has weights, before being called on any data
+# that is because we defined its input shape in advance (in Input)
+assert len(model.weights) == 4
+
+# lets call our model on some data
+y = model(tf.ones((2, 16)))
+assert y.shape == (2, 10)
+
+# you can pass a training argument in call
+# it will get passed down to the drop out layer
+y = model(tf.ones((2, 16)), training=True)
+
+"""
+the functional api tends to be more concise than subclassing and provides
+a few other advantages ( generally the same advantages that functional typed
+languages provide over untyped oo developed) it can be only to defined DAGs of
+layers recursive networks should be defined as layer subclasses instead
+
+in your research workflows you may find yourself mix and matching oo models with functional models
+
+note that the model class also features built in training & evaluation loops: fit(), predict()
+and evaluate() configured via the compile() method. these built in functions give you
+access to the following built in training infrastructure features
+
+call backs you can leverage built in callbacks for early stopping, model check checkpointing
+and monitoring training with tensor board. you can also implement custom call callbacks
+
+distributed training, you can easily scale up your training to multiple gpus, tpu or multiple machines
+with tf.distribute api with no changes to your code
+step fusing, with the steps_per_execution argument in model.compile() you can process
+multiple batches in a single tf.function call, which greatly improves device utilization on tpu
+
+"""
+inputs = tf.keras.Input(shape=(784,), dtype="float32")
+x = keras.layers.Dense(32, activation="relu")(inputs)
+x = keras.layers.Dense(32, activation="relu")(x)
+outputs = keras.layers.Dense(10)(x)
+model = tf.keras.Model(inputs, outputs)
+
+# specifying the loss, optimizer, and metrics with compile()
+model.compile(
+    loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+    optimizer = keras.optimizers.Adam(learning_rate=1e-3),
+    metrics = [keras.metrics.SparseCategoricalAccuracy()]
+)
+
+# train the model with the dataset for 2 epochs
+model.fit(dataset, epochs=2)
+model.predict(dataset)
+model.evaluate(dataset)
+
+"""
+Epoch 1/2
+938/938 [==============================] - 1s 1ms/step - loss: 0.3958 - sparse_categorical_accuracy: 0.8872
+Epoch 2/2
+938/938 [==============================] - 1s 1ms/step - loss: 0.1916 - sparse_categorical_accuracy: 0.9447
+938/938 [==============================] - 1s 798us/step - loss: 0.1729 - sparse_categorical_accuracy: 0.9485
+
+[0.1728748232126236, 0.9484500288963318]
+
+
+you can always subclass the model class (it works like how the subclassing layer works)
+
+if you want to leverage built in training loops for you OO models, just override the model.train_step()
+to customize what happens in fit() while retaining support for th built in infrastructure
 """
