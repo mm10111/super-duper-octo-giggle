@@ -35,6 +35,7 @@ x = tf.constant([[5, 2], [1, 3]])
 print(x)
 
 """
+run example 
 tf.Tensor(
 [[5 2]
  [1 3]], shape=(2, 2), dtype=int32)
@@ -43,6 +44,7 @@ tf.Tensor(
 # you can get its value as numpy array by calling .NumPy
 x.numpy()
 """
+run example
 array([[5, 2],
        [1, 3]], dtype=int32)
 
@@ -51,6 +53,7 @@ array([[5, 2],
 print("dtype:", x.dtype)
 print("shape:", x.shape)
 """
+run example
 dtype: <dtype: 'int32'>
 shape: (2, 2)
 """
@@ -59,6 +62,7 @@ print(tf.ones(shape=(2, 1)))
 print(tf.zeros(shape=(2, 1)))
 
 """
+run example
 tf.Tensor(
 [[1.]
  [1.]], shape=(2, 1), dtype=float32)
@@ -79,6 +83,7 @@ a = tf.Variable(initial_value)
 print(a)
 
 """
+run example
 <tf.Variable 'Variable:0' shape=(2, 2) dtype=float32, numpy=
 array([[-1.7639292,  0.4263797],
        [-0.3954156, -0.6072024]], dtype=float32)>
@@ -122,6 +127,7 @@ with tf.GradientTape() as tape:
     print(dc_da)
 
 """
+run example
 tf.Tensor(
 [[ 0.99851996 -0.56305575]
  [-0.99985445 -0.773933  ]], shape=(2, 2), dtype=float32)
@@ -134,6 +140,7 @@ with tf.GradientTape() as tape:
     dc_da = tape.gradient(c, a)
     print(dc_da)
 """
+run example
 tf.Tensor(
 [[ 0.99851996 -0.56305575]
  [-0.99985445 -0.773933  ]], shape=(2, 2), dtype=float32)
@@ -148,6 +155,7 @@ with tf.GradientTape() as outer_tape:
     print(d2c_da2)
 
 """
+run example
 tf.Tensor(
 [[1.2510717e-03 4.4079739e-01]
  [2.1326542e-04 3.7843192e-01]], shape=(2, 2), dtype=float32)
@@ -268,6 +276,7 @@ for step, (x, y) in enumerate(dataset):
     if step % 100 == 0:
         print("Step:", step, "Loss:", float(loss))
 """
+run example
 Step: 0 Loss: 2.4605865478515625
 Step: 100 Loss: 2.3112568855285645
 Step: 200 Loss: 2.1920084953308105
@@ -445,6 +454,7 @@ for step, (x, y) in enumerate(dataset):
         print("Step:", step, "Loss:", float(loss))
 
 """
+run example
 Step: 0 Loss: 6.307978630065918
 Step: 100 Loss: 2.5283541679382324
 Step: 200 Loss: 2.4068050384521484
@@ -512,6 +522,7 @@ for epoch in range(2):
      accuracy.reset_state()
 
 """
+run example
 Epoch: 0 Step: 0
 Total running accuracy so far: 0.141
 Epoch: 0 Step: 200
@@ -593,6 +604,7 @@ m.update_state([1, 1, 1, 1], [0.1,0.7, 0.6, 0.0])
 print("Final result:", float(m.result()))
 
 """
+run example
 Intermediate result: 0.5
 Final result: 0.6000000238418579
 
@@ -641,6 +653,7 @@ for step, (x, y) in enumerate(dataset):
         print("Step:", step, "Loss:", float(loss))
 
 """
+run example
 Step: 0 Loss: 2.291861057281494
 Step: 100 Loss: 0.5378965735435486
 Step: 200 Loss: 0.48008084297180176
@@ -771,6 +784,7 @@ model.predict(dataset)
 model.evaluate(dataset)
 
 """
+run example
 Epoch 1/2
 938/938 [==============================] - 1s 1ms/step - loss: 0.3958 - sparse_categorical_accuracy: 0.8872
 Epoch 2/2
@@ -783,5 +797,56 @@ Epoch 2/2
 you can always subclass the model class (it works like how the subclassing layer works)
 
 if you want to leverage built in training loops for you OO models, just override the model.train_step()
-to customize what happens in fit() while retaining support for th built in infrastructure
+to customize what happens in fit() while retaining support for th built in infrastructure features
+outlined above callbacks, zerocode distribution support, and step fusing support
+you may also override test_step() to customize what happens in evaluate() and override predict_step()
+to customize what happens in predict().
+"""
+class CustomModel(keras.Model):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.loss_tracker = keras.metrics.Mean(name="loss")
+        self.accuracy = keras.metrics.SparseCategoricalAccuracy()
+        self.loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+        self.optimizer = keras.optimizers.Adam(learning_rate=1e-3)
+
+    def train_step(self, data):
+        # un pack the data. the structure depends on your model
+        # what you pass to fit()
+        x, y = data
+        with tf.GradientTape() as tape:
+            # forward pass
+            y_pred = self(x, training=True)
+            loss = self.loss_fn(y, y_pred)
+        gradients = tape.gradient(loss, self.trainable_weights)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_weights))
+        # update metrics and include the metric that tracks the loss
+        self.loss_tracker.update_state(loss)
+        self.accuracy.update_state(y, y_pred)
+        # return the dict mapping metric names to the current value
+        return {"loss": self.loss_tracker.result(), "accuracy": self.accuracy.result()}
+
+    @property
+    def metrics(self):
+        # list metric objects here so that reset_states() can be automatically
+        # at the start of each epoch
+        return [self.loss_tracker, self.accuracy]
+
+inputs = tf.keras.Input(shape=(784,), dtype="float32")
+x = keras.layers.Dense(32, activation="relu")(inputs)
+x = keras.layers.Dense(32, activation="relu")(x)
+outputs = keras.layers.Dense(10)(x)
+model = CustomModel(inputs, outputs)
+model.compile()
+model.fit(dataset, epochs=2)
+
+"""
+ run example
+Epoch 1/2
+938/938 [==============================] - 1s 1ms/step - loss: 0.3737 - accuracy: 0.8340
+Epoch 2/2
+938/938 [==============================] - 1s 946us/step - loss: 0.1934 - accuracy: 0.9405
+
+<keras.callbacks.History at 0x15dfae110>
+
 """
