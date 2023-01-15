@@ -35,7 +35,7 @@ x = tf.constant([[5, 2], [1, 3]])
 print(x)
 
 """
-run example 
+run example
 tf.Tensor(
 [[5 2]
  [1 3]], shape=(2, 2), dtype=int32)

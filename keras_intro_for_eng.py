@@ -61,6 +61,9 @@ details such as:
  tf.data.experimental.make_csv_dataset to load structured data from csv files.
 
  suppose you have image fils sortd by class in different folders like this
+
+ run example
+
  main_directory/
  ...class_a/
  ........a_image_1.jpg
@@ -174,6 +177,8 @@ integer_data = vectorizer(training_data)
 print(integer_data)
 
 """
+run example
+
 output
 tf.Tensor(
 [[4 5 2 9 3]
@@ -188,6 +193,8 @@ integer_data = vectorizer(training_data)
 print(integer_data)
 
 """
+run example
+
 output
 tf.Tensor(
 [[0. 1. 1. 1. 0. 1. 1. 1. 0. 0. 0. 0. 0. 0. 1. 1.]
@@ -206,6 +213,7 @@ print("var: %.4f" % np.var(normalized_data))
 print("mean: %.4f" % np.mean(normalized_data))
 
 """
+run example
 output
 var: 1.0000
 mean: -0.0000
@@ -231,6 +239,7 @@ print("min:", np.min(output_data))
 print("max:", np.max(output_data))
 
 """
+run example
 output
 shape: (64, 150, 150, 3)
 min: 0.0
@@ -296,6 +305,7 @@ print(processed_data.shape)
 # any size
 model.summary()
 """
+run example
 output
 
 Model: "model"
@@ -391,6 +401,7 @@ print("Fit on Dataset")
 history = model.fit(dataset, epochs=1)
 
 """
+run example
 output
 
 Model: "model_1"
@@ -426,7 +437,8 @@ the history.history dict contains per epoch time series of metric values (here w
 
 """
 print(history.history)
-" output: {'loss': [0.11384169012308121]}"
+
+" run example  output: {'loss': [0.11384169012308121]}"
 
 """
 for a detailed overview of how to use fit(), see the guide to training & evaluation with the built-in
@@ -510,6 +522,8 @@ print("loss: %.2f" % loss)
 print("acc: %.2f" % acc)
 
 """
+run example
+
 157/157 [==============================] - 0s 688us/step - loss: 0.1041 - acc: 0.9692
 loss: 0.10
 acc: 0.97
