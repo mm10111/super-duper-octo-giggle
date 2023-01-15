@@ -849,4 +849,179 @@ Epoch 2/2
 
 <keras.callbacks.History at 0x15dfae110>
 
+End to end experiment example 1: variational autoencoders
+
+a layer encapsulates a state (created in _init_ or build) and some computation (defined in call)
+
+layers can be recursively nested to create new, bigger computation blocks
+
+you can easily write highly hackable training loops by opening a GradientTape, calling your model inside
+the tape's scope, then retrieving gradients and applying them via an optimizer
+you can speed up your training loops using the @tf.function decorator
+layers can create and track losses (typically regularization losses) via self.add_loss()
+
+lets put all these things together into an end to end example, we are going to implement
+a variational autoencoder (VAE), we will train on MNIST digits.
+
+Our VAE will be a subclass of layer, built as a nested composition of layers that subclass Layer.
+it will feature a regularization loss (KL divergence)
+
+below is our model definition, first we have an encoder class, which uses a sampling layer to map MNIST
+digit to a latent space triplet (z_mean, z_log_var, z)
+
 """
+
+from tensorflow.keras import layers
+
+class Sampling(layers.Layer):
+    # uses (z_mean, z_log_var) to sample z, the vector encoding a digit
+    def call(self, inputs):
+        z_mean, z_log_var = inputs
+        batch = tf.shape(z_mean)[0]
+        dim = tf.shape(z_mean)[1]
+        epsilon = tf.keras.backend.random_normal(shape=(batch, dim))
+        return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+
+class Encoder(layers.Layer):
+    # maps MNIST digits to a triplet (z_mean, z_log_var, z)
+
+    def __init__(self, latent_dim=32, intermediate_dim=64, **kwargs)
+        super().__init__(**kwargs)
+        self.dense_proj = layers.Dense(intermediate_dim, activation=tf.nn.relu)
+        self.dense_mean = layers.Dense(latent_dim)
+        self.dense_log_var = layers.Dense(latent_dim)
+        self.sampling = Sampling()
+
+
+    def call(self, inputs):
+        x = self.dense_proj(inputs)
+        z_mean = self.dense_mean(x)
+        z_log_var = self.dense_log_var(x)
+        z = self.sampling((z_mean, z_log_var))
+        return z_mean, z_log_var, z
+
+# we have a decoder class which maps the probabilistic latent space coordinates back to a MNIST digit
+
+class Decoder(layers.Layer):
+    # converts z, the encoded digit vector, back into a readable digit
+
+    def __init__(self, original_dim, intermediate_dim=64, **kwargs):
+        super().__init__(**kwargs)
+        self.dense_proj = layers.Dense(intermediate_dim, activation=tf.nn.relu)
+        self.dense_output = layers.Dense(original_dim, activation=tf.nn.sigmoid)
+
+    def call(self, inputs):
+        x = self.dense_proj(inputs)
+        return self.dense_output(x)
+
+# finally our variationalautoencoder composes together an encoder and a decoder
+# and creates a KL divergence regularization loss via add_loss()
+
+class VariationalAutoEncoder(layers.Layer):
+    # combines the encoder and decoder into an end to end model for training
+
+    def __init__(self, original_dim, intermediate_dim=64, latent_dim=32, **kwargs):
+        super().__init__(**kwargs)
+        self.original_dim = original_dim
+        self.encoder = Encoder(latent_dim=latent_dim, intermediate_dim=intermediate_dim)
+        self.decoder = Decoder(original_dim, intermediate_dim=intermediate_dim)
+
+    def call(self, inputs):
+        z_mean, z_log_var, z = self.encoder(inputs)
+        reconstructed = self.decoder(Z)
+        # add KL divergence regularization loss
+        kl_loss = -0.5 * tf.reduce_mean(
+            z_log_var - tf.square(z_mean) - tf.exp(z_log_var) + 1
+        )
+        self.add_loss(kl_loss)
+        return reconstructed
+
+# lets write a training loop. our training step is decorated with a @tf.function
+# to compile into a super fast graph function
+
+
+# our model
+vae = VariationalAutoEncoder(original_dim=784, intermediate_dim=64, latent_dim=32)
+
+# loss and optimizer
+loss_fn = tf.keras.losses.MeanSquaredError()
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+# prepare a dataset
+(x_train, _), _ = tf.keras.datasets.mnist.load_data()
+dataset = tf.data.Dataset.from_tensor_slices(
+    x_train.reshape(60000, 784).astype("float32") / 255
+)
+dataset = dataset.shuffle(buffer_size=1024).batch(32)
+
+@tf.function
+
+def training_step(x):
+    with tf.GradientTape() as tape:
+        # compute input reconstruction
+        reconstructed = vae(x)
+        # compute loss
+        loss = loss_fn(x, reconstructed)
+        # add KLD term
+        loss += sum(vae.losses)
+    # update the weights of the VAE
+    grads = tape.gradient(loss, vae.trainable_weights)
+    optimizer.apply_gradients(zip(grads, vae.trainable_weights))
+    return loss
+
+# keep track of the losses over time
+losses = []
+for step, x in enumerate(dataset):
+    loss = training_step(x)
+    # logging the result
+    losses.append(float(loss))
+    if step % 100 == 0:
+        print("Step:", step, "Loss:", sum(losses) / len(losses))
+
+    # stop after 1000 steps
+    # training the model to convergence is left
+    # as an exercise to the reader
+    if step >= 1000:
+        break
+"""
+run example
+Step: 0 Loss: 0.3246927559375763
+Step: 100 Loss: 0.12636583357459247
+Step: 200 Loss: 0.099717023916802
+Step: 300 Loss: 0.0896754782535507
+Step: 400 Loss: 0.08474012454065896
+Step: 500 Loss: 0.08153954131933981
+Step: 600 Loss: 0.07914437327577349
+Step: 700 Loss: 0.07779341802723738
+Step: 800 Loss: 0.07658644887466406
+Step: 900 Loss: 0.07564477964855325
+Step: 1000 Loss: 0.07468595038671474
+
+
+buolding and training this type of model in keras is quick
+
+the code above is verbose, we handle every little detail on our own by hand,
+this provides flexibility but also creates work
+
+lets look at the functional api version of VAE
+"""
+original_dim = 784
+intermediate_dim = 64
+latent_dim = 32
+
+# define encoder model
+original_inputs = tf.keras.Input(shape=(original_dim,), name="encoder_input")
+x = layers.Dense(intermediate_dim, activation="relu")(original_inputs)
+z_mean = layers.Dense(latent_dim, name="z_mean")(x)
+z_log_var = layers.Dense(latent_dim, name="z_log_var")(x)
+z = Sampling()(z_mean, z_log_var)
+encoder = tf.keras.Model(inputs=original_inputs, outputs=z, name="encoder")
+
+# define decoder model
+latent_inputs = tf.keras.Input(shape=(latent_dim,), name="z_sampling")
+x = layers.Dense(intermediate_dim, activation="relu")(latent_inputs)
+outputs = layers.Dense(original_dim, activation="sigmoid")(x)
+decoder = tf.keras.Model(inputs=latent_inputs, outputs=outputs, name="decoder")
+
+# define VAE model 
+outputs = decoder(z)
