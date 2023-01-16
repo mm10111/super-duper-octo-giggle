@@ -1023,5 +1023,169 @@ x = layers.Dense(intermediate_dim, activation="relu")(latent_inputs)
 outputs = layers.Dense(original_dim, activation="sigmoid")(x)
 decoder = tf.keras.Model(inputs=latent_inputs, outputs=outputs, name="decoder")
 
-# define VAE model 
+# define VAE model
 outputs = decoder(z)
+vae = tf.keras.Model(inputs=original_inputs, outputs=outputs, name="vae")
+
+# add KL divergence regularization loss
+kl_loss = -0.5 * tf.reduce_mean(z_log_var - tf.square(z_mean) - tf.exp(z_log_var) + 1)
+vae.add_loss(kl_loss)
+
+# loss and optimizer
+loss_fn = tf.keras.losses.MeanSquaredError()
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+# prepare a dataset
+(x_train, _), _ = tf.keras.datasets.mnist.load_data()
+dataset = tf.data.Dataset.from_tensor_slices(x_train.reshape(60000, 784).astype("float32")/255)
+# use x_train as both input and target
+dataset = dataset.map(lambda x: (x, x))
+dataset = dataset.shuffle(buffer_size=1024).batch(32)
+# configure the model for training
+vae.compile(optimizer, loss=loss_fn)
+# model training
+vae.fit(dataset, epochs=1)
+
+"""
+run example
+1875/1875 [==============================] - 3s 1ms/step - loss: 0.0713
+
+<keras.callbacks.History at 0x15e150f10>
+
+the use of the functional api and fit reduces our example from 65 lines to 25 lines (including model definition and training).
+
+the keras philosophy is to offer productivity boosting features like these while simultaneously empowering you to write
+down everything yourself to gain absolute control over every little detail. like we did we in the low level training loop.
+
+end-to-end experiment example 2: hypernetworks
+
+the idea is to use a small deep neural network (the hypernetwork) to generate
+the weights for a larger network (the main network)
+
+let's implement a trivial hypernetwork: we will be using small 2 layer network to generate
+the weights of a larger 3 layer network
+
+"""
+import numpy as np
+input_dim = 784
+classes = 10
+
+# this is the main network we will actually use to predict labels
+main_network = keras.Sequential(
+    [keras.layers.Dense(64, activation=tf.nn.relu), keras.layers.Dense(classes),]
+
+)
+
+# it doesnt need to create it's own weights so lets mark the layers
+# as already built, that way calling main_network, wont create new variables
+for layer in main_network.layers:
+    layer.built = True
+
+# this is the number of weight coefficients to generate.
+# each layer in the main network requires output_dim * input_dim + output_dim coefficients
+num_weights_to_generate = (classes * 64 + classes) + (64 * input_dim + 64)
+
+# this is the hypernetwork that generates the weights of the main_network above
+hypernetwork = keras.Sequential(
+    [
+        keras.layers.Dense(16, activation=tf.nn.relu),
+        keras.layers.Dense(num_weights_to_generate, activation=tf.nn.sigmoid),]
+)
+
+# for the trainning loop, for each beatch of data:
+# we use hypernetwork to generate an array of weight coefficients, weights_pred
+# we reshape these coefficients into kernel & bias tensors for the main_network
+# we run the forward pass of the main_network to compute the actual MNIST predictions
+# we run backprop through the weights of the hypernetwork to minimize the final classification loss
+
+# loss and optimizer
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+
+# prepare a dataset
+(x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
+dataset = tf.data.Dataset.from_tensor_slices(
+    (x_train.reshape(60000, 784).astype("float32") / 255, y_train)
+
+)
+
+# we will use a batch size of 1 for this experiment
+dataset = dataset.shuffle(buffer_size=1024).batch(1)
+
+@tf.function
+def train_step(x, y):
+    with tf.GradientTape() as tape:
+        # predict weights for the outer model
+        weights_pred = hypernetwork(x)
+
+        # reshape them to the expected shapes for w and b for the outer model
+        # layer 0 kernel
+        start_index = 0
+        w0_shape = (input_dim, 64)
+        w0_coeffs = weights_pred[:, start_index : start_index + np.prod(w0_shape)]
+        w0 = tf.reshape(w0_coeffs, w0_shape)
+        start_index += np.prod(w0_shape)
+        # layer 0 bias
+        b0_shape = (64,)
+        b0_coeffs = weights_pred[:, start_index : start_index + np.prod(b0_shape)]
+        b0 = tf.reshape(b0_coeffs, b0_shape)
+        start_index += np.prod(b0_shape)
+
+        # layer 1 kernel
+        w1_shape = (64, classes)
+        w1_coeffs = weights_pred[:, start_index : start_index + np.prod(w1_shape)]
+        w1 = tf.reshape(w1_coeffs, w1_shape)
+        start_index += np.prod(w1_shape)
+
+        # layer 1 bias
+        b1_shape = (classes,)
+        b1_coeffs = weights_pred[:, start_index : start_index + np.prod(b1_shape)]
+        b1 = tf.reshape(b1_coeffs, b1_shape)
+        start_index += np.prod(b1_shape)
+
+        # set the weight predictions as the weight variables on the outer model
+        main_network.layers[0].kernel = w0
+        main_network.layers[0].bias = b0
+        main_network.layers[1].kernel = w1
+        main_network.layers[1].bias = b1
+
+        # inference on the outer model
+        preds = main_network(x)
+        loss = loss_fin(y, preds)
+
+    # train  only inner models
+    grads = tape.gradient(loss, hypernetwork.trainable_weights)
+    optimizer.apply_gradients(zip(grads, hypernetwork.trainable_weights))
+    return loss
+
+# keep track of the losses over time
+losses = []
+for step, (x, y) in enumerate(dataset):
+    loss = train_step(x, y)
+
+    # logging
+    losses.append(float(loss))
+    if step % 100 == 0:
+        print("Step:", step, "Loss:", sum(losses) / len(losses))
+
+    # stop after 1000 steps
+    # training the model to convergence is left
+    # as an exercise to the reader
+    if step >= 1000:
+        break
+
+"""
+run example:
+
+Step: 0 Loss: 1.3274627923965454
+Step: 100 Loss: 2.5709669510326765
+Step: 200 Loss: 2.2051062234700542
+Step: 300 Loss: 2.0191424489686534
+Step: 400 Loss: 1.8865989956417193
+Step: 500 Loss: 1.7706833476604333
+Step: 600 Loss: 1.6479115988951523
+Step: 700 Loss: 1.603230944064981
+Step: 800 Loss: 1.533307248778922
+Step: 900 Loss: 1.513232192888781
+Step: 1000 Loss: 1.4671869220568465
+"""
